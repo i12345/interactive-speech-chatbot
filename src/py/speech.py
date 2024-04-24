@@ -19,7 +19,7 @@ from google.cloud import texttospeech
 client_tts = texttospeech.TextToSpeechClient()
 
 
-config = cloud_speech.RecognitionConfig(
+config_sst = cloud_speech.RecognitionConfig(
         auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
         language_codes=["en-US"],
         model="long",
@@ -28,7 +28,7 @@ config = cloud_speech.RecognitionConfig(
 def speech_to_text(speech: bytes) -> str:
     request = cloud_speech.RecognizeRequest(
         recognizer=f"projects/{project_id}/locations/global/recognizers/_",
-        config=config,
+        config=config_sst,
         content=speech,
     )
 
