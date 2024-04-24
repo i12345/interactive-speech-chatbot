@@ -2,19 +2,17 @@
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import SilenceAwareRecorder from './recorder';
-import { FFMpegManager } from './ffmpeg';
 
 enum State {
   Loading = "Loading",
+  Waiting = "Waiting for speech",
   Listening = "Listening",
-  ProcessingAudioOnBrowser = "Preparing data for server",
   Thinking = "Thinking",
   Responding = "Responding",
   Quit = "Quit",
 }
 
 export function ChatApp() {
-    const ffmpeg = useRef<FFMpegManager>()
     const [state, setState] = useState(State.Loading)
     const [error, setError] = useState<string>()
 
@@ -22,31 +20,26 @@ export function ChatApp() {
     const [volume, setVolume] = useState<number>()
 
     const recorder = useRef<SilenceAwareRecorder>()
-    const currentAudio = useRef<Blob[]>([])
     
-    const sendChat = useCallback(async () => {
-        const audioChunks = currentAudio.current!.splice(0, currentAudio.current!.length)
+    const sendChat = useCallback(async (audio: Blob) => {
+        const currentAudioLengthTime = audio.size / (recorder.current!.bitRate / 8)
+        const min_record_length = 1.75
 
-        const currentAudioLengthTime = audioChunks.reduce((totalLength, blob) => totalLength + blob.size, 0) / (recorder.current!.bitRate / 8)
-        const min_record_length = 1
+        if (currentAudioLengthTime < min_record_length)
+            return
 
         const newLog = [...log, `${currentAudioLengthTime.toFixed(1)}s`]
         setLog(newLog)
         log.splice(0, log.length, ...newLog)
-      
-        if (currentAudioLengthTime < min_record_length)
-            return
-        
-        try {
-            setState(State.ProcessingAudioOnBrowser)
-            const recording = await ffmpeg.current!.concatAudio(audioChunks)
 
+        setError(undefined)
+        try {
             setState(State.Thinking)
-  
+
             // https://developer.mozilla.org/en-US/docs/Learn/Forms/Sending_forms_through_JavaScript
             const formData = new FormData()
-            formData.append("recording", recording)
-            const response = await fetch("http://localhost:3001/chat/", {
+            formData.append("audio", audio)
+            const response = await fetch("https://localhost:3001/chat/", {
                 method: "POST",
                 // Set the FormData instance as the request body
                 body: formData,
@@ -62,34 +55,27 @@ export function ChatApp() {
     }, [setState, recorder, setLog, log])
 
     // https://react.dev/reference/react/useRef#avoiding-recreating-the-ref-contents
-    if (ffmpeg.current == null) {
-        ffmpeg.current = new FFMpegManager({
-            async onLoaded() {
-                console.log("ffmpeg loaded")
+    if (recorder.current == null) {
+        recorder.current = new SilenceAwareRecorder({
+            onVolumeChange: volume => setVolume(volume),
+            onSilenceChanged: isSilentNow => {
+                if (isSilentNow) {
+                    setState(State.Listening)
+                }
+                else {
+                    setState(State.Listening)
+                }
+            },
+            onConcatDataAvailable: audio => void sendChat(audio),
+            silenceDuration: 2500,
+            silentThreshold: -25,
+            minDecibels: -100,
+            timeSlice: 1000,
+            stopRecorderOnSilence: true,
+        })
 
-                recorder.current = new SilenceAwareRecorder({
-                    onDataAvailable: recording => {
-                        currentAudio.current!.push(recording)
-                    },
-                    onVolumeChange: volume => setVolume(volume),
-                    onSilenceChanged: isSilentNow => {
-                        if (isSilentNow) {
-                            void sendChat()
-                        }
-                        else {
-                            setState(State.Listening)
-                        }
-                    },
-                    silenceDuration: 2500,
-                    silentThreshold: -25,
-                    minDecibels: -100,
-                    timeSlice: 1000,
-                    stopRecorderOnSilence: true,
-                })
-
-                await recorder.current!.startRecording()
-                setState(State.Listening)
-            }
+        recorder.current!.startRecording().then(() => {
+            setState(State.Listening)
         })
     }
 

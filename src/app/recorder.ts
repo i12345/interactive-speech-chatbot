@@ -8,7 +8,7 @@ export type OnVolumeChange = (volume: number) => void;
 export type OnDataAvailable = (data: Blob) => void | undefined;
 
 // added
-export type OnSilenceChanged = (isSilentNow: boolean) => void;
+export type OnSilenceChanged = (isSilentNow: boolean) => void | undefined;
 
 export interface SilenceAwareRecorderOptions {
   deviceId?: string;
@@ -16,6 +16,7 @@ export interface SilenceAwareRecorderOptions {
   onDataAvailable?: OnDataAvailable;
   onVolumeChange?: OnVolumeChange;
   onSilenceChanged?: OnSilenceChanged;
+  onConcatDataAvailable?: OnDataAvailable;
 
   setDeviceId?: (deviceId: string) => void;
   silenceDetectionEnabled?: boolean;
@@ -54,6 +55,10 @@ class SilenceAwareRecorder {
 
   private readonly onSilenceChanged?: OnSilenceChanged;
 
+  private readonly onConcatDataAvailable?: OnDataAvailable;
+
+  private readonly concatData: Blob[] = [];
+
   private isSilence: boolean;
 
   private hasSoundStarted: boolean;
@@ -75,6 +80,7 @@ class SilenceAwareRecorder {
     onVolumeChange,
     onDataAvailable,
     onSilenceChanged,
+    onConcatDataAvailable,
     silenceDuration = 2500,
     silentThreshold = -50,
     minDecibels = -100,
@@ -97,6 +103,7 @@ class SilenceAwareRecorder {
     this.onVolumeChange = onVolumeChange;
     this.onDataAvailable = onDataAvailable;
     this.onSilenceChanged = onSilenceChanged;
+    this.onConcatDataAvailable = onConcatDataAvailable;
     this.isSilence = false;
     this.hasSoundStarted = false;
     this.deviceId = deviceId;
@@ -145,6 +152,7 @@ class SilenceAwareRecorder {
 
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0 && !this.isSilence) {
+        this.concatData.push(event.data);
         this.onDataAvailable?.(event.data);
       }
     };
@@ -216,7 +224,7 @@ class SilenceAwareRecorder {
 
     if (this.silenceDetectionEnabled) {
       const isSilentNow = (volume < this.silenceThreshold)
-
+      
       if (isSilentNow) {
         if (!this.silenceTimeout) {
           this.silenceTimeout = setTimeout(() => {
@@ -226,6 +234,10 @@ class SilenceAwareRecorder {
             this.isSilence = true;
             this.silenceTimeout = null;
             this.onSilenceChanged?.(isSilentNow);
+            
+            // https://mitya.uk/articles/concatenating-audio-pure-javascript
+            const concatAudio = new Blob(this.concatData.splice(0, this.concatData.length));
+            this.onConcatDataAvailable?.(concatAudio);
           }, this.silenceDuration);
         }
       } else {

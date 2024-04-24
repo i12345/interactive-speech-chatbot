@@ -1,5 +1,7 @@
 # based from https://cloud.google.com/speech-to-text/v2/docs/transcribe-client-libraries
 
+from datetime import datetime
+from random import randint
 from google.cloud.speech_v2 import SpeechClient
 from google.cloud.speech_v2.types import cloud_speech
 
@@ -35,7 +37,10 @@ def speech_to_text(speech: bytes) -> str:
     # Transcribes the audio into text
     response = client_sst.recognize(request=request)
     
-    return response.results[0].alternatives[0].transcript
+    if len(response.results[0].alternatives) > 0:
+        return response.results[0].alternatives[0].transcript
+    else:
+        return "<could not hear>"
 
 def text_to_speech(text: str) -> bytes:
     # https://cloud.google.com/text-to-speech/docs/create-audio-text-client-libraries#client-libraries-install-python
