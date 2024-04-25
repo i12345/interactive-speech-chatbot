@@ -92,18 +92,18 @@ export function ChatApp() {
                 role: "assistant"
             })
 
-            // const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
-            // audioResponse.addEventListener('ended', () => {
-            //     setState(State.Listening)
-            // })
-            // setState(State.Responding)
-            // await audioResponse.play()
+            const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
+            audioResponse.addEventListener('ended', () => {
+                setState(State.Listening)
+            })
+            setState(State.Responding)
+            await audioResponse.play()
         }
         catch (x) {
             setError(String(x))
         }
 
-        recorder.current!.startRecording()
+        // recorder.current!.startRecording()
         setState(State.Listening)
     }, [setState, recorder, setLog, log])
 

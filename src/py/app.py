@@ -52,11 +52,10 @@ def chat(
     
     return chat_response(conversation_obj)
 
-@app.get("/stt")
-def stt(
+@app.get("/tts")
+def tts(
         ssml: str,
-        response: Response,
     ):
+    response = Response(content=text_to_speech(ssml), media_type="audio/ogg")
     response.headers.append("Access-Control-Allow-Origin", "*")
-    
-    return Response(text_to_speech(ssml), "audio/ogg")
+    return response
