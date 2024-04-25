@@ -32,9 +32,15 @@ interface Conversation {
     messages: Message[]
 }
 
+enum ExternalAction {
+    none = "none",
+    end_conversation = "end_conversation",
+}
+
 interface ChatResponse {
     ssml: string
     text: string
+    external_action: ExternalAction
 }
 
 export function ChatApp() {
@@ -45,6 +51,7 @@ export function ChatApp() {
     const [log, setLog] = useState<string[]>([])
     const [volume, setVolume] = useState<number>()
     const [messages, setMessages] = useState<Message[]>([])
+    const hasQuit = useRef({ quit: false })
 
     const recorder = useRef<SilenceAwareRecorder>()
     
@@ -106,19 +113,34 @@ export function ChatApp() {
 
             const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
             audioResponse.addEventListener('ended', () => {
-                setHearsSpeech(true)
-                recorder.current!.resumeConcat()
-                setState(State.Listening)
+                if (!hasQuit.current!.quit) {
+                    setHearsSpeech(true)
+                    recorder.current!.resumeConcat()
+                    setState(State.Listening)
+                }
+                else {
+                    setState(State.Quit)
+                }
             })
             audioResponse.addEventListener('error', () => {
-                setHearsSpeech(true)
-                recorder.current!.resumeConcat()
-                setState(State.Listening)
+                if (!hasQuit.current!.quit) {
+                    setHearsSpeech(true)
+                    recorder.current!.resumeConcat()
+                    setState(State.Listening)
+                }
+                else {
+                    setState(State.Quit)
+                }
             })
 
             setState(State.Responding)
             recorder.current!.stopConcat()
             await audioResponse.play()
+
+            if (response.external_action === ExternalAction.end_conversation) {
+                hasQuit.current!.quit = true
+                recorder.current!.stopRecording()
+            }
         }
         catch (x) {
             recorder.current!.resumeConcat()
@@ -127,7 +149,7 @@ export function ChatApp() {
             setHearsSpeech(false)
             setState(State.Listening)
         }
-    }, [setState, recorder, setLog, log, setMessages, messages, setHearsSpeech])
+    }, [setState, recorder, setLog, log, setMessages, messages, setHearsSpeech, hasQuit])
 
     // https://react.dev/reference/react/useRef#avoiding-recreating-the-ref-contents
     if (recorder.current == null) {

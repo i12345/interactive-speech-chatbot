@@ -19,13 +19,16 @@ class Message(BaseModel):
 
 class Conversation(BaseModel):
     messages: list[Message]
+    is_ended: bool
     
-class ExternalAction(BaseModel):
-    name: str
+class ExternalAction(Enum):
+    none = "none"
+    end_conversation = "end_conversation"
 
 class ChatResponse(BaseModel):
     ssml: str
     text: str
+    external_action: ExternalAction
 
 class Run(BaseModel):
     internal_action_history: list["ActionSelection"] = []
@@ -68,7 +71,7 @@ class SuggestResponseAction(InternalAction):
         text = arg
         ssml = text_to_ssml(text=text)
         
-        agent_run.current_response_to_user = ChatResponse(text=text, ssml=ssml)
+        agent_run.current_response_to_user = ChatResponse(text=text, ssml=ssml, external_action=ExternalAction.none)
 
 class ThinkAction(InternalAction):
     def __init__(self):
@@ -164,10 +167,32 @@ class ApproveResponseAction(InternalAction):
             run.current_response_to_user = None
 
 @predictor
+def say_goodbye(conversation: Conversation) -> str:
+    """Generate a friendly farewell for this conversation."""
+
+class EndConversationAction(InternalAction):
+    def __init__(self):
+        super().__init__(
+            name="End conversation",
+            function="Ends the conversation and stops listening to the user",
+            when_to_run="When the users says goodbye or quit. DO NOT QUIT THE CONVERSATION UNLESS THEY ASK YOU TO QUIT.",
+            how_to_run="Simply choose to run this action",
+            notes="This action will prevent the app from listening to this conversation further"
+        )
+    
+    def act(self, arg: str, run: Run):
+        text = say_goodbye(conversation=run.conversation)
+        ssml = text_to_ssml(text=text)
+        
+        run.current_response_to_user = ChatResponse(text=text, ssml=ssml, external_action=ExternalAction.end_conversation)
+        run.is_response_approved_yet = True
+
+@predictor
 def select_action(run: Run, actions: list[InternalAction]) -> ActionSelection:
     """You are a friendly voice chatbot. Select an internal action to think or act toward responding to the user. Consider what you have already thought about (your internal thoughts). Do not select the action you just performed. Let's think step by step."""
 
 actions: list[InternalAction] = [
+    EndConversationAction(),
     # QueryWolframAlpha()
     SearchGoogleAction(),
     ThinkAction(),
@@ -208,7 +233,7 @@ def chat_response(conversation: Conversation) -> ChatResponse:
 
     if response is None:
         text = "<<That was too hard to think>>"
-        return ChatResponse(text=text, ssml=text_to_ssml(text=text))
+        return ChatResponse(text=text, ssml=text_to_ssml(text=text), external_action=ExternalAction.none)
 
     return response
 
