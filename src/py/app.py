@@ -4,7 +4,10 @@ from fastapi import FastAPI, File, Form, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import ssl
 
-from src.py.speech import speech_to_text
+from pydantic_core import from_json
+
+from src.py.chat import ChatResponse, Conversation, Message, chat_response
+from src.py.speech import speech_to_text, text_to_speech
 
 # https://python.plainenglish.io/managing-api-keys-and-secrets-in-python-using-the-dotenv-library-a-beginners-guide-33890401cd15
 load_dotenv()
@@ -28,15 +31,32 @@ ssl_context.load_cert_chain('./certificates/localhost.pem', keyfile='./certifica
 def index() -> str:
     return "API online"
 
+@app.post("/sst/")
+def sst(
+        audio: Annotated[bytes, File()],
+        response: Response,
+    ) -> str:
+    response.headers.append("Access-Control-Allow-Origin", "*")
+    
+    return speech_to_text(audio)
+
 @app.post("/chat/")
 def chat(
-    audio: Annotated[bytes, File()],
+    conversation: Annotated[str, Form()],
     response: Response,
-    ) -> str:
-    request = speech_to_text(audio)
-    
-    print(f"Request: {request}")
+    ) -> ChatResponse:
+    conversation_parsed = from_json(conversation)
+    conversation_obj = Conversation.model_construct(**conversation_parsed)
     
     response.headers.append("Access-Control-Allow-Origin", "*")
     
-    return request
+    return chat_response(conversation_obj)
+
+@app.get("/stt")
+def stt(
+        ssml: str,
+        response: Response,
+    ):
+    response.headers.append("Access-Control-Allow-Origin", "*")
+    
+    return Response(text_to_speech(ssml), "audio/ogg")
