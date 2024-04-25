@@ -1,11 +1,17 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import Enum
+import os
 from typing import Literal, Optional
 from pydantic import BaseModel
 from dspy.functional import cot, predictor
 import dspy
 
-dspy.configure(lm=dspy.OpenAI())
+import wolframalpha
+
+from googleapiclient.discovery import build
+
+dspy.configure(lm=dspy.OpenAI(model="gpt-3.5-turbo"))
 
 class Message(BaseModel):
     role: str
@@ -21,10 +27,12 @@ class ChatResponse(BaseModel):
     ssml: str
     text: str
 
-class AgentRun(BaseModel):
-    conversation: Conversation
+class Run(BaseModel):
+    internal_action_history: list["ActionSelection"] = []
     internal_thoughts: list[str] = []
-    response_to_user: Optional[ChatResponse]
+    conversation: Conversation
+    current_response_to_user: Optional[ChatResponse]
+    is_response_approved_yet: bool
 
 class InternalAction(BaseModel, ABC):
     """An action that you can do"""
@@ -35,7 +43,7 @@ class InternalAction(BaseModel, ABC):
     notes: str
     
     @abstractmethod
-    def act(self, arg: str, agent_run: AgentRun):
+    def act(self, arg: str, run: Run):
         pass
 
 class ActionSelection(BaseModel):
@@ -44,23 +52,23 @@ class ActionSelection(BaseModel):
 
 @predictor
 def text_to_ssml(text: str) -> str:
-    """Convert the text to SSML for speech synthesis (with emotion where appropriate)"""
+    """Generate SSML from text for speech synthesis. Only generate the SSML"""
 
-class RespondAction(InternalAction):
+class SuggestResponseAction(InternalAction):
     def __init__(self):
         super().__init__(
-            name="Respond",
-            function="Respond to user",
+            name="Suggest response",
+            function="Suggests a response to the user",
             when_to_run="When you think you have enough information or want to respond.",
-            how_to_run="Put your response in the action arg",
-            notes="This action will send your response to the user"
+            how_to_run="Put your suggested response in the action arg",
+            notes="This action will set current_response_to_user to your suggestion"
         )
         
-    def act(self, arg: str, agent_run: AgentRun):
+    def act(self, arg: str, agent_run: Run):
         text = arg
         ssml = text_to_ssml(text=text)
         
-        agent_run.response_to_user = ChatResponse(text=text, ssml=ssml)
+        agent_run.current_response_to_user = ChatResponse(text=text, ssml=ssml)
 
 class ThinkAction(InternalAction):
     def __init__(self):
@@ -72,44 +80,136 @@ class ThinkAction(InternalAction):
             notes="This will save the thought to short-term memory; it will only persist in current exchange"
         )
         
-    def act(self, arg: str, agent_run: AgentRun):
+    def act(self, arg: str, agent_run: Run):
         thought = arg
         agent_run.internal_thoughts.append(thought)
+
+# https://wolframalpha.readthedocs.io/en/latest/?badge=latest#wolframalpha.Client
+wolframalpha_client = wolframalpha.Client(os.environ.get("WOLFRAM_ALPHA_APP_ID"))
+
+class QueryWolframAlpha(InternalAction):
+    def __init__(self):
+        super().__init__(
+            name="Query WolframAlpha",
+            function="Queries WolframAlpha",
+            when_to_run="When you are asked or have question about current events or something you don't know.",
+            how_to_run="Put your query (natural language question or something to learn more about) in the action arg",
+            notes="Results will be plaintext formatted"
+        )
         
-# class SearchAction(InternalAction):
-#     def __init__(self):
-#         super().__init__(
-#             name="Search",
-#             function="Search the internal for a query",
-#             when_to_run="When you have a question about current events or technical info you want to look up.",
-#             notes="This will search Google"
-#         )
+    def act(self, arg: str, agent_run: Run):
+        query = arg
+        res = wolframalpha_client.query(query)
+        results = ""
+        for pod in res.pods:
+            for subpod in pod.subpods:
+                if subpod.plaintext is not None:
+                    results += subpod.plaintext + "\n"
+        agent_run.internal_thoughts.append(f"WolframAlpha results for {query}\n\n{results}")
+
+# https://github.com/googleapis/google-api-python-client/blob/main/samples/customsearch/main.py
+
+search_google_service = build(
+    "customsearch", "v1", developerKey=os.environ.get("GOOGLE_CUSTOM_SEARCH_API_KEY")
+)
+
+class SearchGoogleAction(InternalAction):
+    def __init__(self):
+        super().__init__(
+            name="Search Google",
+            function="Searches Google",
+            when_to_run="When you are asked or have question about current events or something you don't know.",
+            how_to_run="Put your query (natural language question or something to learn more about) in the action arg",
+            notes="Results will be plaintext formatted"
+        )
         
-#     def act(self, arg: str, agent_run: AgentRun):
-#         query = arg
-#         results = ""
-#         agent_run.internal_thoughts.append(f"Search for {query}\n\n{results}")
+    def act(self, arg: str, agent_run: Run):
+        res = (
+            search_google_service.cse()
+            .list(
+                q=arg,
+                cx="547adf6cd88134f04",
+            )
+            .execute()
+        )
+        
+        limit = 5
+        answer = f"Google search top {limit} results for {arg}\n"
+        
+        for item in res["items"]:
+            limit -= 1
+            if limit == 0:
+                break
+            answer += f"\n{item['title']} ({item['displayLink']})\n{item['snippet']}\n"
+        agent_run.internal_thoughts.append(answer)
 
 @predictor
-def select_action(run: AgentRun, actions: list[InternalAction]) -> ActionSelection:
-    """Select an internal action to respond to the user's last chat"""
+def approve_response(run: Run) -> bool:
+    """Decide whether or not current_response_to_user is permitted. Return false if current_response_to_user appears made up when user was requesting factual information. Return true to approve this response to respond to the user with."""
+
+class ApproveResponseAction(InternalAction):
+    def __init__(self):
+        super().__init__(
+            name="Approve response",
+            function="Approves response to return to user",
+            when_to_run="When current_response_to_user is available",
+            how_to_run="Simply choose to run this action",
+            notes="This action will estimate whether current_response_to_user is accurate or made up"
+        )
+        
+    def act(self, arg: str, run: Run):
+        if approve_response(run=run):
+            run.is_response_approved_yet = True
+        else:
+            run.current_response_to_user = None
+
+@predictor
+def select_action(run: Run, actions: list[InternalAction]) -> ActionSelection:
+    """You are a friendly voice chatbot. Select an internal action to think or act toward responding to the user. Consider what you have already thought about (your internal thoughts). Do not select the action you just performed. Let's think step by step."""
 
 actions: list[InternalAction] = [
-    RespondAction(),
+    # QueryWolframAlpha()
+    SearchGoogleAction(),
     ThinkAction(),
+    ApproveResponseAction(),
+    SuggestResponseAction(),
 ]
 
 def chat_response(conversation: Conversation) -> ChatResponse:
-    run = AgentRun(conversation=conversation, internal_thoughts=[], response_to_user=None)
+    run = Run(conversation=conversation, internal_thoughts=[], internal_action_history=[], current_response_to_user=None, is_response_approved_yet=False)
     
-    while run.response_to_user is None:
-        action_selection = select_action(run=run, actions=actions) # type: ActionSelection
+    run.internal_thoughts.append(f"Today (and the time) is {datetime.now()}")
+    
+    response = None # type: Optional[ChatResponse]
+    iteration = 0
+    iterations_max = 10
+    
+    last_action = ""
+    
+    while not run.is_response_approved_yet and iteration < iterations_max:
+        iteration += 1
+        
+        actions_permit = [action for action in actions if action.name != last_action]
+        
+        action_selection = select_action(run=run, actions=actions_permit) # type: ActionSelection
         action = next(action for action in actions if action.name == action_selection.action_name)
+        print(f"Received action {action_selection.action_name} with {action_selection.arg}")
+        run.internal_action_history.append(action_selection)
+        
+        last_action = action.name
+        
         if action is not None:
             action.act(action_selection.arg, run)
         else:
             run.internal_thoughts.append(f"<<The action {action_selection.action_name} does not exist>>")
+        
+        if run.current_response_to_user is not None:
+            response = run.current_response_to_user
 
-    return run.response_to_user
+    if response is None:
+        text = "<<That was too hard to think>>"
+        return ChatResponse(text=text, ssml=text_to_ssml(text=text))
+
+    return response
 
 

@@ -107,7 +107,7 @@ export function ChatApp() {
             const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
             audioResponse.addEventListener('ended', () => {
                 setHearsSpeech(true)
-                recorder.current!.resumeConcat(0.5)
+                recorder.current!.resumeConcat()
                 setState(State.Listening)
             })
             audioResponse.addEventListener('error', () => {
