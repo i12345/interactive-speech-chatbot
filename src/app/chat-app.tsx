@@ -94,18 +94,20 @@ export function ChatApp() {
 
             const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
             audioResponse.addEventListener('ended', () => {
+                recorder.current!.resumeConcat(0.5)
                 setState(State.Listening)
             })
+
             setState(State.Responding)
+            recorder.current!.stopConcat()
             await audioResponse.play()
         }
         catch (x) {
+            recorder.current!.resumeConcat()
             setError(String(x))
+            setState(State.Listening)
         }
-
-        // recorder.current!.startRecording()
-        setState(State.Listening)
-    }, [setState, recorder, setLog, log])
+    }, [setState, recorder, setLog, log, setMessages, messages])
 
     // https://react.dev/reference/react/useRef#avoiding-recreating-the-ref-contents
     if (recorder.current == null) {
@@ -123,7 +125,7 @@ export function ChatApp() {
             silenceDuration: 2500,
             silentThreshold: -25,
             minDecibels: -100,
-            timeSlice: 1000,
+            timeSlice: 250,
             stopRecorderOnSilence: true,
         })
 
