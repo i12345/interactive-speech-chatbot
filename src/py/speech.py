@@ -28,6 +28,9 @@ config_sst = cloud_speech.RecognitionConfig(
     )
 
 def speech_to_text(speech: bytes) -> str:
+    with open("lastchat.oga", "wb") as f:
+        f.write(speech)
+    
     request = cloud_speech.RecognizeRequest(
         recognizer=f"projects/{project_id}/locations/global/recognizers/_",
         config=config_sst,
@@ -42,11 +45,11 @@ def speech_to_text(speech: bytes) -> str:
     else:
         return "<could not hear>"
 
-def text_to_speech(text: str) -> bytes:
+def text_to_speech(ssml: str) -> bytes:
     # https://cloud.google.com/text-to-speech/docs/create-audio-text-client-libraries#client-libraries-install-python
     
     # Set the text input to be synthesized
-    synthesis_input = texttospeech.SynthesisInput(text=text)
+    synthesis_input = texttospeech.SynthesisInput(ssml=ssml)
 
     voice = texttospeech.VoiceSelectionParams(
         language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.MALE
