@@ -4,12 +4,23 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import SilenceAwareRecorder from './recorder';
 
 enum State {
-  Loading = "Loading",
-  Waiting = "Waiting for speech",
-  Listening = "Listening",
-  Thinking = "Thinking",
-  Responding = "Responding",
-  Quit = "Quit",
+    Loading = "Loading",
+    Listening = "Listening",
+    ListeningPassive = `${State.Listening}Passive`,
+    ListeningActive = `${State.Listening}Active`,
+    Thinking = "Thinking",
+    Responding = "Responding",
+    Quit = "Quit",
+}
+
+const stateClasses: Record<State, string> = {
+    [State.Loading]: "transparent",
+    [State.ListeningPassive]: "bg-gray-400",
+    [State.ListeningActive]: "bg-gray-600",
+    [State.Listening]: "bg-gray-400",
+    [State.Thinking]: "bg-blue-500",
+    [State.Responding]: "bg-blue-600",
+    [State.Quit]: "transparent",
 }
 
 interface Message {
@@ -28,6 +39,7 @@ interface ChatResponse {
 
 export function ChatApp() {
     const [state, setState] = useState(State.Loading)
+    const [hearsSpeech, setHearsSpeech] = useState(false)
     const [error, setError] = useState<string>()
 
     const [log, setLog] = useState<string[]>([])
@@ -56,7 +68,7 @@ export function ChatApp() {
                 // Set the FormData instance as the request body
                 body: formData,
             })
-            return await api_response.text()
+            return await api_response.json() as string
         }
 
         function addMessage(msg: Message) {
@@ -94,7 +106,13 @@ export function ChatApp() {
 
             const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
             audioResponse.addEventListener('ended', () => {
+                setHearsSpeech(false)
                 recorder.current!.resumeConcat(0.5)
+                setState(State.Listening)
+            })
+            audioResponse.addEventListener('error', () => {
+                setHearsSpeech(false)
+                recorder.current!.resumeConcat()
                 setState(State.Listening)
             })
 
@@ -105,54 +123,47 @@ export function ChatApp() {
         catch (x) {
             recorder.current!.resumeConcat()
             setError(String(x))
+            console.error(x)
+            setHearsSpeech(false)
             setState(State.Listening)
         }
-    }, [setState, recorder, setLog, log, setMessages, messages])
+    }, [setState, recorder, setLog, log, setMessages, messages, setHearsSpeech])
 
     // https://react.dev/reference/react/useRef#avoiding-recreating-the-ref-contents
     if (recorder.current == null) {
         recorder.current = new SilenceAwareRecorder({
             onVolumeChange: volume => setVolume(volume),
             onSilenceChanged: isSilentNow => {
-                if (isSilentNow) {
-                    setState(State.Listening)
-                }
-                else {
-                    setState(State.Listening)
-                }
+                setHearsSpeech(!isSilentNow)
+
+                // if (!isSilentNow)
+                //     recorder.current!.resumeConcat(0.5)
             },
             onConcatDataAvailable: audio => void sendChat(audio),
             silenceDuration: 2500,
-            silentThreshold: -25,
+            silentThreshold: -28,
             minDecibels: -100,
-            timeSlice: 250,
+            timeSlice: 200,
             stopRecorderOnSilence: true,
+            // stopRecorderOnSilence: false,
         })
 
         recorder.current!.startRecording().then(() => {
             setState(State.Listening)
+            setHearsSpeech(true)
         })
     }
 
     return (
         <main className="flex flex-col items-center">
             <div className='self-center'>
-                <div className="">{error}</div>
-                {volume ? (
-                    <>
-                        <div>Volume: {volume.toFixed(0)} dB</div>
-                    </>
-                ) : <></>}
-                <div>{state}</div>
-                <div className='flex flex-col-reverse'>
-                    {messages.map(msg => (
-                        <div className={"rounded-md m-2 p-2 " + (msg.role === 'user' ? 'bg-gray-300 align-left' : 'bg-blue-800 align-right')}>
+                <p className={`m-2 px-3 py-2 rounded-md ${stateClasses[state == State.Listening ? hearsSpeech ? State.ListeningActive : State.ListeningPassive : state]}`}>{state}</p>
+                <div className='flex flex-col max-w-screen-sm'>
+                    {[...messages].reverse().map((msg, i) => (
+                        <div key={messages.length - i} className={"rounded-md m-2 px-3 py-2 " + (msg.role === 'user' ? `bg-gray-300 text-slate-900 text-slate align-left` : `bg-blue-800 text-slate-100 align-right`)}>
                             {msg.content}
                         </div>
                     ))}
-                </div>
-                <div className='flex flex-col-reverse'>
-                    {log.map((entry, i) => <div key={i}>{entry}</div>)}
                 </div>
             </div>
         </main>
