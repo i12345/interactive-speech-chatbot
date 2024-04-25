@@ -34,8 +34,7 @@ class Run(BaseModel):
     internal_action_history: list["ActionSelection"] = []
     internal_thoughts: list[str] = []
     conversation: Conversation
-    current_response_to_user: Optional[ChatResponse]
-    is_response_approved_yet: bool
+    suggested_responses: list[ChatResponse]
 
 class InternalAction(BaseModel, ABC):
     """An action that you can do"""
@@ -64,14 +63,14 @@ class SuggestResponseAction(InternalAction):
             function="Suggests a response to the user",
             when_to_run="When you think you have enough information or want to respond.",
             how_to_run="Put your suggested response in the action arg",
-            notes="This action will set current_response_to_user to your suggestion"
+            notes="This action will add a suggested response to consider returning"
         )
         
     def act(self, arg: str, agent_run: Run):
         text = arg
         ssml = text_to_ssml(text=text)
         
-        agent_run.current_response_to_user = ChatResponse(text=text, ssml=ssml, external_action=ExternalAction.none)
+        agent_run.suggested_responses.append(ChatResponse(text=text, ssml=ssml, external_action=ExternalAction.none))
 
 class ThinkAction(InternalAction):
     def __init__(self):
@@ -146,25 +145,25 @@ class SearchGoogleAction(InternalAction):
             answer += f"\n{item['title']} ({item['displayLink']})\n{item['snippet']}\n"
         agent_run.internal_thoughts.append(answer)
 
-@predictor
-def approve_response(run: Run) -> bool:
-    """Decide whether or not current_response_to_user is permitted. Return false if current_response_to_user appears made up when user was requesting factual information. Return true to approve this response to respond to the user with."""
+# @predictor
+# def approve_response(run: Run) -> bool:
+#     """Decide whether or not current_response_to_user is permitted. Return false if current_response_to_user appears made up when user was requesting factual information. Return true to approve this response to respond to the user with."""
 
-class ApproveResponseAction(InternalAction):
-    def __init__(self):
-        super().__init__(
-            name="Approve response",
-            function="Approves response to return to user",
-            when_to_run="When current_response_to_user is available",
-            how_to_run="Simply choose to run this action",
-            notes="This action will estimate whether current_response_to_user is accurate or made up"
-        )
+# class ApproveResponseAction(InternalAction):
+#     def __init__(self):
+#         super().__init__(
+#             name="Approve response",
+#             function="Approves response to return to user",
+#             when_to_run="When current_response_to_user is available",
+#             how_to_run="Simply choose to run this action",
+#             notes="This action will estimate whether current_response_to_user is accurate or made up"
+#         )
         
-    def act(self, arg: str, run: Run):
-        if approve_response(run=run):
-            run.is_response_approved_yet = True
-        else:
-            run.current_response_to_user = None
+#     def act(self, arg: str, run: Run):
+#         if approve_response(run=run):
+#             run.is_response_approved_yet = True
+#         else:
+#             run.current_response_to_user = None
 
 @predictor
 def say_goodbye(conversation: Conversation) -> str:
@@ -184,8 +183,7 @@ class EndConversationAction(InternalAction):
         text = say_goodbye(conversation=run.conversation)
         ssml = text_to_ssml(text=text)
         
-        run.current_response_to_user = ChatResponse(text=text, ssml=ssml, external_action=ExternalAction.end_conversation)
-        run.is_response_approved_yet = True
+        run.suggested_responses.append(ChatResponse(text=text, ssml=ssml, external_action=ExternalAction.end_conversation))
 
 @predictor
 def select_action(run: Run, actions: list[InternalAction]) -> ActionSelection:
@@ -196,22 +194,24 @@ actions: list[InternalAction] = [
     # QueryWolframAlpha()
     SearchGoogleAction(),
     ThinkAction(),
-    ApproveResponseAction(),
+    # ApproveResponseAction(),
     SuggestResponseAction(),
 ]
 
+@predictor
+def choose_response(conversation: Conversation, suggested_responses: list[ChatResponse]) -> ChatResponse:
+    """Chooses the most appropriate response of a list of suggested responses in a conversation"""
+
 def chat_response(conversation: Conversation) -> ChatResponse:
-    run = Run(conversation=conversation, internal_thoughts=[], internal_action_history=[], current_response_to_user=None, is_response_approved_yet=False)
+    run = Run(conversation=conversation, internal_thoughts=[], internal_action_history=[], suggested_responses=[])
     
     run.internal_thoughts.append(f"Today (and the time) is {datetime.now()}")
     
-    response = None # type: Optional[ChatResponse]
-    iteration = 0
-    iterations_max = 10
+    iterations_max = 8
     
     last_action = ""
     
-    while not run.is_response_approved_yet and iteration < iterations_max:
+    for iteration in range(iterations_max):
         iteration += 1
         
         actions_permit = [action for action in actions if action.name != last_action]
@@ -228,8 +228,7 @@ def chat_response(conversation: Conversation) -> ChatResponse:
         else:
             run.internal_thoughts.append(f"<<The action {action_selection.action_name} does not exist>>")
         
-        if run.current_response_to_user is not None:
-            response = run.current_response_to_user
+    response = choose_response(conversation=conversation, suggested_responses=run.suggested_responses)
 
     if response is None:
         text = "<<That was too hard to think>>"
