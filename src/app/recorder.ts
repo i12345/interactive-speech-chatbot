@@ -1,7 +1,7 @@
 "use client"
 
-// SilenceAwareRecorder.ts
-// by tenlau
+// adapted from SilenceAwareRecorder.ts
+// MIT License, by tenlau (Dmitriy O.)
 // https://github.com/teunlao/silence-aware-recorder/blob/main/packages/recorder/src/lib/SilenceAwareRecorder.ts
 
 export type OnVolumeChange = (volume: number) => void;

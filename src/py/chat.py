@@ -19,7 +19,6 @@ class Message(BaseModel):
 
 class Conversation(BaseModel):
     messages: list[Message]
-    is_ended: bool
     
 class ExternalAction(Enum):
     none = "none"
