@@ -4,43 +4,54 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import SilenceAwareRecorder from './recorder';
 
 enum State {
-  Loading = "Loading",
-  Waiting = "Waiting for speech",
-  Listening = "Listening",
-  Thinking = "Thinking",
-  Responding = "Responding",
-  Quit = "Quit",
+    Loading = "Loading",
+    Listening = "Listening",
+    ListeningPassive = `${State.Listening}Passive`,
+    ListeningActive = `${State.Listening}Active`,
+    Thinking = "Thinking",
+    Responding = "Responding",
+    Quit = "Quit",
 }
 
-enum MsgPerson {
-    user = "user",
-    ai = "ai",
+const stateClasses: Record<State, string> = {
+    [State.Loading]: "transparent",
+    [State.ListeningPassive]: "bg-gray-400",
+    [State.ListeningActive]: "bg-gray-600",
+    [State.Listening]: "bg-gray-400",
+    [State.Thinking]: "bg-blue-500",
+    [State.Responding]: "bg-blue-600",
+    [State.Quit]: "transparent",
 }
 
-interface Msg {
-    person: MsgPerson
+interface Message {
+    role: 'user' | 'assistant'
     content: string
 }
 
 interface Conversation {
-    messages: Msg[]
+    messages: Message[]
+}
+
+enum ExternalAction {
+    none = "none",
+    end_conversation = "end_conversation",
 }
 
 interface ChatResponse {
-    transcribed_message: string
-    response_chat: string
-    response_chat_ssml: string
+    ssml: string
+    text: string
+    external_action: ExternalAction
 }
 
 export function ChatApp() {
     const [state, setState] = useState(State.Loading)
+    const [hearsSpeech, setHearsSpeech] = useState(false)
     const [error, setError] = useState<string>()
 
     const [log, setLog] = useState<string[]>([])
     const [volume, setVolume] = useState<number>()
-    const [isSilent, setIsSilent] = useState(false)
-
-    const [messages, setMessages] = useState<Msg[]>([])
+    const [messages, setMessages] = useState<Message[]>([])
+    const hasQuit = useRef({ quit: false })
 
     const recorder = useRef<SilenceAwareRecorder>()
     
@@ -55,6 +66,23 @@ export function ChatApp() {
         setLog(newLog)
         log.splice(0, log.length, ...newLog)
 
+        async function sst() {
+            // https://developer.mozilla.org/en-US/docs/Learn/Forms/Sending_forms_through_JavaScript
+            const formData = new FormData()
+            formData.append("audio", audio)
+            const api_response = await fetch("https://localhost:3001/sst/", {
+                method: "POST",
+                // Set the FormData instance as the request body
+                body: formData,
+            })
+            return await api_response.json() as string
+        }
+
+        function addMessage(msg: Message) {
+            messages.push(msg)
+            setMessages([...messages])
+        }
+        
         setError(undefined)
         try {
             // recorder.current!.stopRecording()
@@ -62,92 +90,105 @@ export function ChatApp() {
 
             setState(State.Thinking)
 
+            addMessage({
+                role: "user",
+                content: await sst()
+            })
+
             const conversation: Conversation = {
-                messages
+                messages,
             }
 
             // https://developer.mozilla.org/en-US/docs/Learn/Forms/Sending_forms_through_JavaScript
             const formData = new FormData()
-            formData.append("audio", audio)
             formData.append("conversation", JSON.stringify(conversation))
-            const response = await fetch("https://localhost:3001/chat/", {
+            const api_response = await fetch("https://localhost:3001/chat/", {
                 method: "POST",
                 // Set the FormData instance as the request body
                 body: formData,
             })
-            
-            const dataResponse: ChatResponse = await response.json()
-            console.log("response")
-            console.log(dataResponse)
+            const response = await api_response.json() as ChatResponse
 
-            const newMessages = [...messages,
-                { person: MsgPerson.user, content: dataResponse.transcribed_message } as Msg,
-                { person: MsgPerson.ai, content: dataResponse.response_chat } as Msg,
-            ]
-            messages.splice(0, messages.length, ...newMessages)
-            setMessages(newMessages)
-
-            setState(State.Listening)
-            return
-
-            const audioResponseUrl = `https://localhost:3001/tts?ssml=${dataResponse.response_chat_ssml}`
-
-            const audioResponse = new Audio(audioResponseUrl)
-            setState(State.Responding)
-            await audioResponse.play()
-            audioResponse.addEventListener('ended', async () => {
-                // await recorder.current!.startRecording()
-                // recorder.current!.storeConcatData = true;
-                setState(State.Listening)
+            addMessage({
+                content: response.text,
+                role: "assistant"
             })
+
+            const audioResponse = new Audio(`https://localhost:3001/tts?ssml=${response.ssml}`)
+            audioResponse.addEventListener('ended', () => {
+                if (!hasQuit.current!.quit) {
+                    setHearsSpeech(true)
+                    recorder.current!.resumeConcat()
+                    setState(State.Listening)
+                }
+                else {
+                    setState(State.Quit)
+                }
+            })
+            audioResponse.addEventListener('error', () => {
+                if (!hasQuit.current!.quit) {
+                    setHearsSpeech(true)
+                    recorder.current!.resumeConcat()
+                    setState(State.Listening)
+                }
+                else {
+                    setState(State.Quit)
+                }
+            })
+
+            setState(State.Responding)
+            recorder.current!.stopConcat()
+            await audioResponse.play()
+
+            if (response.external_action === ExternalAction.end_conversation) {
+                hasQuit.current!.quit = true
+                recorder.current!.stopRecording()
+            }
         }
         catch (x) {
+            recorder.current!.resumeConcat()
             setError(String(x))
-            // await recorder.current!.startRecording()
+            console.error(x)
+            setHearsSpeech(false)
             setState(State.Listening)
         }
-    }, [setState, recorder, setLog, log])
+    }, [setState, recorder, setLog, log, setMessages, messages, setHearsSpeech, hasQuit])
 
     // https://react.dev/reference/react/useRef#avoiding-recreating-the-ref-contents
     if (recorder.current == null) {
         recorder.current = new SilenceAwareRecorder({
             onVolumeChange: volume => setVolume(volume),
-            onSilenceChanged: isSilentNow => setIsSilent(isSilentNow),
+            onSilenceChanged: isSilentNow => {
+                setHearsSpeech(!isSilentNow)
+
+                // if (!isSilentNow)
+                //     recorder.current!.resumeConcat(0.5)
+            },
             onConcatDataAvailable: audio => void sendChat(audio),
-            silenceDuration: 1000,
-            silentThreshold: -30,
+            silenceDuration: 2500,
+            silentThreshold: -28,
             minDecibels: -100,
-            timeSlice: 2500,
-            // stopRecorderOnSilence: true,
-            stopRecorderOnSilence: false,
+            timeSlice: 200,
+            stopRecorderOnSilence: true,
+            // stopRecorderOnSilence: false,
         })
 
         recorder.current!.startRecording().then(() => {
             setState(State.Listening)
+            setHearsSpeech(true)
         })
     }
 
     return (
         <main className="flex flex-col items-center">
             <div className='self-center'>
-                <div className="bg-red">{error}</div>
-                {volume ? (
-                    <div style={{ background: isSilent ? undefined: 'green' }}>
-                        <div>Volume: {volume.toFixed(0)} dB</div>
-                    </div>
-                ) : <></>}
-                <div className='items-center m-1'>{state}</div>
-
-                <div className='flex flex-col-reverse'>
-                    {messages.map((msg, i) => (
-                        <div key={i} className={`m-2 p-1.5 flex-none w-auto ` + (msg.person === MsgPerson.ai ? 'bg-lime-700 rounded-s-sm rounded-e-xl text-left' : 'bg-gray-800 rounded-e-sm rounded-s-xl text-right')}>
-                            <b>{msg.person}</b> {msg.content}
+                <p className={`m-2 px-3 py-2 rounded-md ${stateClasses[state == State.Listening ? hearsSpeech ? State.ListeningActive : State.ListeningPassive : state]}`}>{state}</p>
+                <div className='flex flex-col max-w-screen-sm'>
+                    {[...messages].reverse().map((msg, i) => (
+                        <div key={messages.length - i} className={"rounded-md m-2 px-3 py-2 " + (msg.role === 'user' ? `bg-gray-300 text-slate-900 text-slate align-left` : `bg-blue-800 text-slate-100 align-right`)}>
+                            {msg.content}
                         </div>
                     ))}
-                </div>
-
-                <div className='flex flex-col-reverse'>
-                    {log.map((entry, i) => <div key={i}>{entry}</div>)}
                 </div>
             </div>
         </main>

@@ -1,7 +1,7 @@
 "use client"
 
-// SilenceAwareRecorder.ts
-// by tenlau
+// adapted from SilenceAwareRecorder.ts
+// MIT License, by tenlau (Dmitriy O.)
 // https://github.com/teunlao/silence-aware-recorder/blob/main/packages/recorder/src/lib/SilenceAwareRecorder.ts
 
 export type OnVolumeChange = (volume: number) => void;
@@ -59,7 +59,7 @@ class SilenceAwareRecorder {
 
   private readonly concatData: Blob[] = [];
 
-  public storeConcatData = true;
+  private _concatAudio = true;
 
   private isSilence: boolean;
 
@@ -76,6 +76,17 @@ class SilenceAwareRecorder {
   // added
   get bitRate() {
     return this.mediaRecorder!.audioBitsPerSecond
+  }
+
+  get concatAudio() {
+    return this._concatAudio
+  }
+
+  set concatAudio(concatAudio) {
+    if (this._concatAudio && !concatAudio)
+      this.concatData.splice(0, this.concatData.length)
+    
+    this._concatAudio = concatAudio
   }
 
   constructor({
@@ -111,6 +122,18 @@ class SilenceAwareRecorder {
     this.deviceId = deviceId;
     this.isRecording = false;
     this.animationFrameId = null;
+  }
+
+  resumeConcat(timePrev = 0) {
+    if (!this.concatAudio) {
+      const dataKeep = Math.ceil(timePrev / this.timeSlice)
+      this.concatData.splice(0, Math.min(this.concatData.length, this.concatData.length - dataKeep))
+      this.concatAudio = true
+    }
+  }
+
+  stopConcat() {
+    this.concatAudio = false
   }
 
   async startRecording(): Promise<void> {
@@ -154,7 +177,7 @@ class SilenceAwareRecorder {
 
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0 && !this.isSilence) {
-        if (this.storeConcatData)
+        if (this.concatAudio)
           this.concatData.push(event.data);
         this.onDataAvailable?.(event.data);
       }
