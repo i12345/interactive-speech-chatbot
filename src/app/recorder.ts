@@ -261,13 +261,9 @@ class SilenceAwareRecorder {
             this.silenceTimeout = null;
             this.onSilenceChanged?.(isSilentNow);
             
-            if (this.concatData.length > 0) {
-              // https://mitya.uk/articles/concatenating-audio-pure-javascript
-              const concatPieces = this.concatData.splice(0, this.concatData.length)
-              // const concatAudio = new Blob(concatPieces, { type: concatPieces[0].type });
-              // this.onConcatDataAvailable?.(concatAudio);
-              this.onConcatDataAvailable?.(concatPieces[0]);
-            }
+            // https://mitya.uk/articles/concatenating-audio-pure-javascript
+            const concatAudio = new Blob(this.concatData.splice(0, this.concatData.length));
+            this.onConcatDataAvailable?.(concatAudio);
           }, this.silenceDuration);
         }
       } else {
